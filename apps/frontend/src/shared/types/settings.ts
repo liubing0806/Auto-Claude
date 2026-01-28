@@ -292,6 +292,23 @@ export interface AppSettings {
   sidebarCollapsed?: boolean;
 }
 
+// Claude Code CLI settings.json configuration
+export interface ClaudeCodeConfig {
+  enabledPlugins?: string[];
+  env?: {
+    ANTHROPIC_AUTH_TOKEN?: string;
+    ANTHROPIC_BASE_URL?: string;
+    [key: string]: string | undefined;
+  };
+  model?: string;
+}
+
+export interface ClaudeCodeConfigPayload {
+  path: string;
+  exists: boolean;
+  config: ClaudeCodeConfig;
+}
+
 // Auto-Claude Source Environment Configuration (for auto-claude repo .env)
 export interface SourceEnvConfig {
   // Claude Authentication (required for ideation, roadmap generation, etc.)

@@ -11,6 +11,8 @@ const __dirname = path.dirname(__filename);
 import { IPC_CHANNELS, DEFAULT_APP_SETTINGS, DEFAULT_AGENT_PROFILES } from '../../shared/constants';
 import type {
   AppSettings,
+  ClaudeCodeConfig,
+  ClaudeCodeConfigPayload,
   IPCResult,
   SourceEnvConfig,
   SourceEnvCheckResult
@@ -23,6 +25,23 @@ import { configureTools, getToolPath, getToolInfo, isPathFromWrongPlatform, preW
 import { parseEnvFile } from './utils';
 
 const settingsPath = getSettingsPath();
+
+const expandHomePath = (inputPath: string): string => {
+  if (inputPath.startsWith('~')) {
+    return path.join(app.getPath('home'), inputPath.slice(1));
+  }
+  return inputPath;
+};
+
+const getClaudeConfigDir = (): string => {
+  const envDir = process.env.CLAUDE_CONFIG_DIR;
+  if (envDir && envDir.trim() !== '') {
+    return expandHomePath(envDir.trim());
+  }
+  return path.join(app.getPath('home'), '.claude');
+};
+
+const getClaudeConfigPath = (): string => path.join(getClaudeConfigDir(), 'settings.json');
 
 /**
  * Auto-detect the auto-claude source path relative to the app location.
@@ -317,6 +336,131 @@ export function registerSettingsHandlers(
         return {
           success: true,
           data: { hasCompletedOnboarding: false }
+        };
+      }
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.SETTINGS_CLAUDE_CODE_GET_CONFIG,
+    async (): Promise<IPCResult<ClaudeCodeConfigPayload>> => {
+      const configPath = getClaudeConfigPath();
+      try {
+        if (!existsSync(configPath)) {
+          return {
+            success: true,
+            data: {
+              path: configPath,
+              exists: false,
+              config: {
+                enabledPlugins: [],
+                env: {},
+                model: ''
+              }
+            }
+          };
+        }
+
+        const content = readFileSync(configPath, 'utf-8');
+        const parsed = JSON.parse(content) as ClaudeCodeConfig;
+        const env = parsed?.env && typeof parsed.env === 'object' ? parsed.env : {};
+
+        return {
+          success: true,
+          data: {
+            path: configPath,
+            exists: true,
+            config: {
+              enabledPlugins: Array.isArray(parsed?.enabledPlugins) ? parsed.enabledPlugins : [],
+              env: {
+                ANTHROPIC_AUTH_TOKEN: env.ANTHROPIC_AUTH_TOKEN,
+                ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL
+              },
+              model: typeof parsed?.model === 'string' ? parsed.model : ''
+            }
+          }
+        };
+      } catch (error) {
+        console.warn('[SETTINGS_CLAUDE_CODE_GET_CONFIG] Error reading Claude Code settings.json:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to read Claude Code settings.json'
+        };
+      }
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.SETTINGS_CLAUDE_CODE_SAVE_CONFIG,
+    async (_event, config: ClaudeCodeConfig): Promise<IPCResult<{ path: string }>> => {
+      const configDir = getClaudeConfigDir();
+      const configPath = getClaudeConfigPath();
+      try {
+        if (!existsSync(configDir)) {
+          mkdirSync(configDir, { recursive: true });
+        }
+
+        const normalizeValue = (value?: string): string | undefined => {
+          if (typeof value !== 'string') {
+            return undefined;
+          }
+          const trimmed = value.trim();
+          return trimmed.length > 0 ? trimmed : undefined;
+        };
+
+        let existingConfig: Record<string, unknown> = {};
+        if (existsSync(configPath)) {
+          const content = readFileSync(configPath, 'utf-8');
+          existingConfig = JSON.parse(content) as Record<string, unknown>;
+        }
+
+        const existingEnv = (existingConfig.env && typeof existingConfig.env === 'object')
+          ? { ...(existingConfig.env as Record<string, string>) }
+          : {};
+
+        const nextEnv = { ...existingEnv };
+        const authToken = normalizeValue(config.env?.ANTHROPIC_AUTH_TOKEN);
+        const baseUrl = normalizeValue(config.env?.ANTHROPIC_BASE_URL);
+
+        if (authToken) {
+          nextEnv.ANTHROPIC_AUTH_TOKEN = authToken;
+        } else {
+          delete nextEnv.ANTHROPIC_AUTH_TOKEN;
+        }
+
+        if (baseUrl) {
+          nextEnv.ANTHROPIC_BASE_URL = baseUrl;
+        } else {
+          delete nextEnv.ANTHROPIC_BASE_URL;
+        }
+
+        const normalizedModel = normalizeValue(config.model);
+
+        const nextConfig: Record<string, unknown> = {
+          ...existingConfig,
+          enabledPlugins: Array.isArray(existingConfig.enabledPlugins)
+            ? existingConfig.enabledPlugins
+            : [],
+          env: nextEnv,
+        };
+
+        if (normalizedModel) {
+          nextConfig.model = normalizedModel;
+        } else {
+          delete nextConfig.model;
+        }
+
+        writeFileSync(configPath, JSON.stringify(nextConfig, null, 2), 'utf-8');
+
+        return {
+          success: true,
+          data: { path: configPath }
+        };
+      } catch (error) {
+        console.warn('[SETTINGS_CLAUDE_CODE_SAVE_CONFIG] Error writing Claude Code settings.json:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to write Claude Code settings.json'
         };
       }
     }

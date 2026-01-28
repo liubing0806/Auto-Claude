@@ -3,6 +3,8 @@ import { IPC_CHANNELS } from '../../shared/constants';
 import type {
   AppSettings,
   IPCResult,
+  ClaudeCodeConfig,
+  ClaudeCodeConfigPayload,
   SourceEnvConfig,
   SourceEnvCheckResult,
   ToolDetectionResult
@@ -12,6 +14,8 @@ export interface SettingsAPI {
   // App Settings
   getSettings: () => Promise<IPCResult<AppSettings>>;
   saveSettings: (settings: Partial<AppSettings>) => Promise<IPCResult>;
+  getClaudeCodeConfig: () => Promise<IPCResult<ClaudeCodeConfigPayload>>;
+  saveClaudeCodeConfig: (config: ClaudeCodeConfig) => Promise<IPCResult<{ path: string }>>;
 
   // CLI Tools Detection
   getCliToolsInfo: () => Promise<IPCResult<{
@@ -45,6 +49,12 @@ export const createSettingsAPI = (): SettingsAPI => ({
 
   saveSettings: (settings: Partial<AppSettings>): Promise<IPCResult> =>
     ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SAVE, settings),
+
+  getClaudeCodeConfig: (): Promise<IPCResult<ClaudeCodeConfigPayload>> =>
+    ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_CLAUDE_CODE_GET_CONFIG),
+
+  saveClaudeCodeConfig: (config: ClaudeCodeConfig): Promise<IPCResult<{ path: string }>> =>
+    ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_CLAUDE_CODE_SAVE_CONFIG, config),
 
   // CLI Tools Detection
   getCliToolsInfo: (): Promise<IPCResult<{
