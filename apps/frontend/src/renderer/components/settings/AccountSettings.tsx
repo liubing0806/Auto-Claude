@@ -37,6 +37,7 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Switch } from '../ui/switch';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { cn } from '../../lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { SettingsSection } from './SettingsSection';
@@ -103,12 +104,24 @@ export function AccountSettings({ settings, onSettingsChange, isOpen }: AccountS
     profileName: string;
   } | null>(null);
 
+  // Claude Code settings.json config state
+  const [claudeConfigPath, setClaudeConfigPath] = useState('');
+  const [claudeConfigExists, setClaudeConfigExists] = useState(false);
+  const [claudeAuthToken, setClaudeAuthToken] = useState('');
+  const [claudeBaseUrl, setClaudeBaseUrl] = useState('');
+  const [claudeModel, setClaudeModel] = useState('');
+  const [showClaudeAuthToken, setShowClaudeAuthToken] = useState(false);
+  const [isLoadingClaudeConfig, setIsLoadingClaudeConfig] = useState(false);
+  const [isSavingClaudeConfig, setIsSavingClaudeConfig] = useState(false);
+  const [selectedApiProfileId, setSelectedApiProfileId] = useState<string | null>(null);
+
   // ============================================
   // Custom Endpoints (API Profiles) state
   // ============================================
   const {
     profiles: apiProfiles,
     activeProfileId: activeApiProfileId,
+    saveProfile: saveApiProfile,
     deleteProfile: deleteApiProfile,
     setActiveProfile: setActiveApiProfile,
     profilesError
@@ -153,6 +166,77 @@ export function AccountSettings({ settings, onSettingsChange, isOpen }: AccountS
       console.warn('[AccountSettings] Failed to load profile usage data:', err);
     }
   }, []);
+
+  const loadClaudeCodeConfig = useCallback(async () => {
+    setIsLoadingClaudeConfig(true);
+    try {
+      const result = await window.electronAPI.getClaudeCodeConfig();
+      if (result.success && result.data) {
+        setClaudeConfigPath(result.data.path);
+        setClaudeConfigExists(result.data.exists);
+        setClaudeAuthToken(result.data.config.env?.ANTHROPIC_AUTH_TOKEN || '');
+        setClaudeBaseUrl(result.data.config.env?.ANTHROPIC_BASE_URL || '');
+        setClaudeModel(result.data.config.model || '');
+      } else {
+        toast({
+          variant: 'destructive',
+          title: t('accounts.claudeCodeConfig.toast.loadFailed'),
+          description: result.error || t('accounts.toast.tryAgain'),
+        });
+      }
+    } catch (err) {
+      console.warn('[AccountSettings] Failed to load Claude Code config:', err);
+      toast({
+        variant: 'destructive',
+        title: t('accounts.claudeCodeConfig.toast.loadFailed'),
+        description: t('accounts.toast.tryAgain'),
+      });
+    } finally {
+      setIsLoadingClaudeConfig(false);
+    }
+  }, [t, toast]);
+
+  const handleSaveClaudeCodeConfig = async (override?: {
+    authToken?: string;
+    baseUrl?: string;
+    model?: string;
+  }) => {
+    setIsSavingClaudeConfig(true);
+    try {
+      const result = await window.electronAPI.saveClaudeCodeConfig({
+        env: {
+          ANTHROPIC_AUTH_TOKEN: override?.authToken ?? claudeAuthToken,
+          ANTHROPIC_BASE_URL: override?.baseUrl ?? claudeBaseUrl
+        },
+        model: override?.model ?? claudeModel
+      });
+      if (result.success) {
+        setClaudeConfigExists(true);
+        if (result.data?.path) {
+          setClaudeConfigPath(result.data.path);
+        }
+        toast({
+          title: t('accounts.claudeCodeConfig.toast.saved'),
+          description: t('accounts.claudeCodeConfig.toast.savedDescription'),
+        });
+      } else {
+        toast({
+          variant: 'destructive',
+          title: t('accounts.claudeCodeConfig.toast.saveFailed'),
+          description: result.error || t('accounts.toast.tryAgain'),
+        });
+      }
+    } catch (err) {
+      console.warn('[AccountSettings] Failed to save Claude Code config:', err);
+      toast({
+        variant: 'destructive',
+        title: t('accounts.claudeCodeConfig.toast.saveFailed'),
+        description: t('accounts.toast.tryAgain'),
+      });
+    } finally {
+      setIsSavingClaudeConfig(false);
+    }
+  };
 
   // Build unified accounts list from both OAuth and API profiles
   const buildUnifiedAccounts = useCallback((): UnifiedAccount[] => {
@@ -251,11 +335,12 @@ export function AccountSettings({ settings, onSettingsChange, isOpen }: AccountS
       loadClaudeProfiles();
       loadAutoSwitchSettings();
       loadPriorityOrder();
+      loadClaudeCodeConfig();
       // Force refresh usage data when Settings opens to get fresh data
       // This bypasses the 1-minute cache to ensure accurate duplicate detection
       loadProfileUsageData(true);
     }
-  }, [isOpen, loadProfileUsageData]);
+  }, [isOpen, loadClaudeCodeConfig, loadProfileUsageData]);
 
   // Subscribe to usage updates for real-time data
   useEffect(() => {
@@ -271,6 +356,16 @@ export function AccountSettings({ settings, onSettingsChange, isOpen }: AccountS
       unsubscribe?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (apiProfiles.length === 0) {
+      setSelectedApiProfileId(null);
+      return;
+    }
+    if (!selectedApiProfileId || !apiProfiles.some((profile) => profile.id === selectedApiProfileId)) {
+      setSelectedApiProfileId(activeApiProfileId ?? apiProfiles[0]?.id ?? null);
+    }
+  }, [apiProfiles, activeApiProfileId, selectedApiProfileId]);
 
   // ============================================
   // Claude Code (OAuth) handlers
@@ -300,6 +395,86 @@ export function AccountSettings({ settings, onSettingsChange, isOpen }: AccountS
     } finally {
       setIsLoadingProfiles(false);
     }
+  };
+
+  const buildImportedProfileName = () => {
+    const baseName = t('accounts.claudeCodeConfig.importName');
+    const existingNames = new Set(apiProfiles.map((profile) => profile.name.toLowerCase()));
+    if (!existingNames.has(baseName.toLowerCase())) {
+      return baseName;
+    }
+    let counter = 2;
+    let candidate = `${baseName} ${counter}`;
+    while (existingNames.has(candidate.toLowerCase())) {
+      counter += 1;
+      candidate = `${baseName} ${counter}`;
+    }
+    return candidate;
+  };
+
+  const handleImportFromClaudeConfig = async () => {
+    const token = claudeAuthToken.trim();
+    const baseUrl = claudeBaseUrl.trim();
+    if (!token || !baseUrl) {
+      toast({
+        variant: 'destructive',
+        title: t('accounts.claudeCodeConfig.toast.importFailed'),
+        description: t('accounts.claudeCodeConfig.toast.importMissingFields'),
+      });
+      return;
+    }
+
+    const profileName = buildImportedProfileName();
+    const success = await saveApiProfile({
+      name: profileName,
+      baseUrl,
+      apiKey: token,
+      models: claudeModel.trim() ? { default: claudeModel.trim() } : undefined
+    });
+
+    if (success) {
+      toast({
+        title: t('accounts.claudeCodeConfig.toast.imported'),
+        description: t('accounts.claudeCodeConfig.toast.importedDescription', { name: profileName }),
+      });
+    } else {
+      toast({
+        variant: 'destructive',
+        title: t('accounts.claudeCodeConfig.toast.importFailed'),
+        description: t('accounts.toast.tryAgain'),
+      });
+    }
+  };
+
+  const handleOverwriteClaudeConfigFromApiProfile = async () => {
+    if (!selectedApiProfileId) {
+      toast({
+        variant: 'destructive',
+        title: t('accounts.claudeCodeConfig.toast.overwriteFailed'),
+        description: t('accounts.claudeCodeConfig.toast.selectApiProfile'),
+      });
+      return;
+    }
+
+    const profile = apiProfiles.find((item) => item.id === selectedApiProfileId);
+    if (!profile) {
+      toast({
+        variant: 'destructive',
+        title: t('accounts.claudeCodeConfig.toast.overwriteFailed'),
+        description: t('accounts.claudeCodeConfig.toast.selectApiProfile'),
+      });
+      return;
+    }
+
+    setClaudeAuthToken(profile.apiKey || '');
+    setClaudeBaseUrl(profile.baseUrl || '');
+    setClaudeModel(profile.models?.default || '');
+
+    await handleSaveClaudeCodeConfig({
+      authToken: profile.apiKey,
+      baseUrl: profile.baseUrl,
+      model: profile.models?.default || ''
+    });
   };
 
   const handleAddClaudeProfile = async () => {
@@ -1069,6 +1244,153 @@ export function AccountSettings({ settings, onSettingsChange, isOpen }: AccountS
                   )}
                   {tCommon('buttons.add')}
                 </Button>
+              </div>
+
+              {/* Claude Code settings.json configuration */}
+              <div className="mt-6 rounded-lg border border-border bg-background p-4 space-y-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-medium">
+                      {t('accounts.claudeCodeConfig.title')}
+                    </h4>
+                    <p className="text-xs text-muted-foreground">
+                      {t('accounts.claudeCodeConfig.description')}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={loadClaudeCodeConfig}
+                    disabled={isLoadingClaudeConfig}
+                    className="h-7 text-xs gap-1"
+                  >
+                    {isLoadingClaudeConfig ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3 w-3" />
+                    )}
+                    {t('accounts.claudeCodeConfig.reload')}
+                  </Button>
+                </div>
+
+                <div className="text-xs text-muted-foreground">
+                  {t('accounts.claudeCodeConfig.location', {
+                    path: claudeConfigPath || t('accounts.claudeCodeConfig.locationUnknown')
+                  })}
+                  {claudeConfigExists
+                    ? ` (${t('accounts.claudeCodeConfig.statusDetected')})`
+                    : ` (${t('accounts.claudeCodeConfig.statusNotFound')})`}
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="claude-config-auth-token" className="text-sm">
+                      {t('accounts.claudeCodeConfig.authToken')}
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        id="claude-config-auth-token"
+                        type={showClaudeAuthToken ? 'text' : 'password'}
+                        value={claudeAuthToken}
+                        onChange={(e) => setClaudeAuthToken(e.target.value)}
+                        placeholder={t('accounts.claudeCodeConfig.authTokenPlaceholder')}
+                        className="pr-10 font-mono text-xs h-8"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowClaudeAuthToken(!showClaudeAuthToken)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        {showClaudeAuthToken ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="claude-config-base-url" className="text-sm">
+                      {t('accounts.claudeCodeConfig.baseUrl')}
+                    </Label>
+                    <Input
+                      id="claude-config-base-url"
+                      value={claudeBaseUrl}
+                      onChange={(e) => setClaudeBaseUrl(e.target.value)}
+                      placeholder={t('accounts.claudeCodeConfig.baseUrlPlaceholder')}
+                      className="text-xs h-8"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="claude-config-model" className="text-sm">
+                      {t('accounts.claudeCodeConfig.model')}
+                    </Label>
+                    <Input
+                      id="claude-config-model"
+                      value={claudeModel}
+                      onChange={(e) => setClaudeModel(e.target.value)}
+                      placeholder={t('accounts.claudeCodeConfig.modelPlaceholder')}
+                      className="text-xs h-8"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => handleSaveClaudeCodeConfig()}
+                    disabled={isSavingClaudeConfig}
+                    className="h-8 text-xs gap-2"
+                  >
+                    {isSavingClaudeConfig ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Check className="h-3 w-3" />
+                    )}
+                    {isSavingClaudeConfig
+                      ? t('accounts.claudeCodeConfig.saving')
+                      : t('accounts.claudeCodeConfig.save')}
+                  </Button>
+                </div>
+
+                <div className="border-t border-border/60 pt-4 space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    {t('accounts.claudeCodeConfig.syncDescription')}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleImportFromClaudeConfig}
+                      className="h-8 text-xs"
+                    >
+                      {t('accounts.claudeCodeConfig.import')}
+                    </Button>
+                    {apiProfiles.length > 0 && (
+                      <div className="flex flex-1 min-w-[220px] items-center gap-2">
+                        <Select
+                          value={selectedApiProfileId ?? ''}
+                          onValueChange={(value) => setSelectedApiProfileId(value)}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder={t('accounts.claudeCodeConfig.selectApiProfile')} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {apiProfiles.map((profile) => (
+                              <SelectItem key={profile.id} value={profile.id}>
+                                {profile.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleOverwriteClaudeConfigFromApiProfile}
+                          className="h-8 text-xs"
+                        >
+                          {t('accounts.claudeCodeConfig.overwrite')}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           </TabsContent>

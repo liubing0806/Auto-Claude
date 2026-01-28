@@ -12,6 +12,19 @@ export const settingsMock = {
   }),
 
   saveSettings: async () => ({ success: true }),
+  getClaudeCodeConfig: async () => ({
+    success: true,
+    data: {
+      path: '~/.claude/settings.json',
+      exists: false,
+      config: {
+        enabledPlugins: [],
+        env: {},
+        model: ''
+      }
+    }
+  }),
+  saveClaudeCodeConfig: async () => ({ success: true, data: { path: '~/.claude/settings.json' } }),
 
   // Sentry error reporting
   notifySentryStateChanged: (_enabled: boolean) => {

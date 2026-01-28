@@ -70,7 +70,13 @@ import type {
   AllProfilesUsage,
   TerminalProfileChangedEvent
 } from './agent';
-import type { AppSettings, SourceEnvConfig, SourceEnvCheckResult } from './settings';
+import type {
+  AppSettings,
+  SourceEnvConfig,
+  SourceEnvCheckResult,
+  ClaudeCodeConfig,
+  ClaudeCodeConfigPayload
+} from './settings';
 import type { AppUpdateInfo, AppUpdateProgress, AppUpdateAvailableEvent, AppUpdateDownloadedEvent } from './app-update';
 import type {
   ChangelogTask,
@@ -335,6 +341,8 @@ export interface ElectronAPI {
   // App settings
   getSettings: () => Promise<IPCResult<AppSettings>>;
   saveSettings: (settings: Partial<AppSettings>) => Promise<IPCResult>;
+  getClaudeCodeConfig: () => Promise<IPCResult<ClaudeCodeConfigPayload>>;
+  saveClaudeCodeConfig: (config: ClaudeCodeConfig) => Promise<IPCResult<{ path: string }>>;
 
   // Sentry error reporting
   notifySentryStateChanged: (enabled: boolean) => void;
